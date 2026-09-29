@@ -1119,6 +1119,48 @@ def _announce_session_reclaimed(session: dict, end_reason: str) -> None:
         logger.debug("session.reclaimed broadcast failed", exc_info=True)
 
 
+def _notify_runtime_session_teardown(
+    session: dict | None,
+    reason: str,
+) -> None:
+    """Notify plugins that one in-memory runtime identity is destroyed.
+
+    This event is intentionally independent from durable-session finalization.
+    A failed deferred resume can destroy its runtime without ending the stored
+    conversation.
+    """
+    if not session:
+        return
+
+    runtime_session_id = str(session.get("_sid") or "")
+    if not runtime_session_id:
+        return
+
+    if session.get("_runtime_teardown_notified"):
+        return
+
+    session["_runtime_teardown_notified"] = True
+
+    agent = session.get("agent")
+    canonical_session_id = (
+        getattr(agent, "session_id", None)
+        or session.get("session_key")
+        or ""
+    )
+
+    try:
+        from hermes_cli.plugins import invoke_hook
+
+        invoke_hook(
+            "on_session_runtime_teardown",
+            runtime_session_id=runtime_session_id,
+            canonical_session_id=str(canonical_session_id),
+            reason=str(reason or ""),
+        )
+    except Exception:
+        pass
+
+
 def _teardown_session(session: dict | None, *, end_reason: str = "tui_close") -> None:
     """Fully tear down a session: finalize, unregister, close agent + worker.
 
@@ -1131,6 +1173,7 @@ def _teardown_session(session: dict | None, *, end_reason: str = "tui_close") ->
     """
     if not session:
         return
+    _notify_runtime_session_teardown(session, end_reason)
     _finalize_session(session, end_reason=end_reason)
     _announce_session_reclaimed(session, end_reason)
     try:
@@ -1163,7 +1206,11 @@ def _attach_worker(sid: str, session: dict, worker) -> None:
     worker.close()
 
 
-def _pop_session_by_id(sid: str) -> dict | None:
+def _pop_session_by_id(
+    sid: str,
+    *,
+    expected_session: dict | None = None,
+) -> dict | None:
     """Atomically detach one live session from the registry.
 
     Detaching is the ownership claim for teardown: once the record is no
@@ -1175,6 +1222,12 @@ def _pop_session_by_id(sid: str) -> dict | None:
     """
     with _sessions_lock:
         session = _sessions.get(sid)
+
+        # Background workers may only detach the exact record they observed.
+        # If the sid was recycled/replaced, leave the replacement untouched.
+        if expected_session is not None and session is not expected_session:
+            return None
+
         if session is not None:
             session["_closing"] = True
             _sessions.pop(sid, None)
@@ -7363,6 +7416,21 @@ def _sync_session_key_after_compress(
         # don't keep targeting the ended row.
         session["session_key"] = new_session_id
 
+    # Plugins holding canonical-session-scoped state need the exact
+    # identity transition Hermes just committed. Observer failure cannot
+    # roll back or break compression.
+    try:
+        from hermes_cli.plugins import invoke_hook
+
+        invoke_hook(
+            "on_session_canonical_rebind",
+            runtime_session_id=str(sid),
+            old_canonical_session_id=str(old_key),
+            new_canonical_session_id=str(new_session_id),
+        )
+    except Exception:
+        pass
+
     # #84417 (belt): invalidate any in-flight ``_drain_queued_prompt`` claim
     # that captured generation under the pre-rotation session_key. A raced
     # drain must not dispatch on the continuation with a stale claim; the
@@ -10894,8 +10962,17 @@ def _schedule_resume_hydration(
                 {"message": message, "phase": "history", "status": "failed"},
             )
             _emit("error", sid, {"message": message})
-            with _sessions_lock:
-                discarded = _sessions.pop(sid, None) if _sessions.get(sid) is session else None
+            discarded = _pop_session_by_id(
+                sid,
+                expected_session=session,
+            )
+
+            if discarded is not None:
+                _notify_runtime_session_teardown(
+                    discarded,
+                    "resume_hydration_failed",
+                )
+
             lease = (discarded or {}).get("active_session_lease")
             if lease is not None:
                 lease.release()

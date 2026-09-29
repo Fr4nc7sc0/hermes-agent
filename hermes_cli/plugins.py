@@ -216,6 +216,10 @@ VALID_HOOKS: Set[str] = {
     # Contract: the transform-family first-valid-wins shape in
     # docs/plugins/hook-taxonomy.md.
     "transform_api_error_classification",
+    # Trusted TUI attachment/runtime lifecycle facts. Observer-only generic hooks.
+    "on_file_attachment_staged",
+    "on_session_canonical_rebind",
+    "on_session_runtime_teardown",
     "on_session_start",
     "on_session_end",
     "on_session_finalize",

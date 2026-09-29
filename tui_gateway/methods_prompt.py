@@ -1379,6 +1379,40 @@ def _(rid, params: dict) -> dict:
             session, raw_path=raw, data_url=data_url, name=name
         )
         ref_path = _attachment_ref_path(session, stored_path)
+        ref_text = f"@file:{_format_ref_value(ref_path)}"
+
+        # Generic trusted staging notification. Plugins observe lifecycle
+        # facts only; product-specific authorization remains outside Hermes.
+        try:
+            from hermes_cli.plugins import invoke_hook
+
+            agent = session.get("agent")
+            canonical_session_id = (
+                getattr(agent, "session_id", None)
+                or session.get("session_key")
+                or ""
+            )
+
+            effective_profile_home = session.get("profile_home")
+            if not effective_profile_home and uploaded:
+                # Uploaded files are staged under:
+                #   <effective-home>/attachments/<file>
+                effective_profile_home = stored_path.parent.parent
+
+            invoke_hook(
+                "on_file_attachment_staged",
+                runtime_session_id=str(params.get("session_id") or ""),
+                canonical_session_id=str(canonical_session_id),
+                profile_home=str(effective_profile_home or ""),
+                stored_path=str(stored_path),
+                uploaded=bool(uploaded),
+                ref_path=str(ref_path),
+                ref_text=ref_text,
+            )
+        except Exception:
+            # file.attach itself must remain independent from plugin health.
+            pass
+
         return _ok(
             rid,
             {
@@ -1386,7 +1420,7 @@ def _(rid, params: dict) -> dict:
                 "name": stored_path.name,
                 "path": str(stored_path),
                 "ref_path": ref_path,
-                "ref_text": f"@file:{_format_ref_value(ref_path)}",
+                "ref_text": ref_text,
                 "uploaded": uploaded,
             },
         )
