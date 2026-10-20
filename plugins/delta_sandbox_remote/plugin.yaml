@@ -1,0 +1,6 @@
+name: delta_sandbox_remote
+version: "0.1.0"
+description: "Observe the fixed Delta remote sandbox status from Hermes attachment lifecycle events."
+kind: standalone
+provides_hooks:
+  - on_file_attachment_staged
