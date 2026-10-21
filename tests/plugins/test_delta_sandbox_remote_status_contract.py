@@ -2,9 +2,12 @@
 
 Hermes core must remain generic.
 
-The Delta-specific plugin will consume the generic
-on_file_attachment_staged lifecycle event and may query
-only /sandbox/status in this slice.
+The Delta-specific plugin consumes the generic
+on_file_attachment_staged lifecycle event for STATUS.
+
+The newer ENSURE transport helper may exist, but it must
+remain dormant here: the attachment hook must not invoke
+ENSURE, and sandbox.exec remains forbidden.
 
 No real network request is performed by this test.
 """
@@ -34,9 +37,7 @@ BASE_URL_ENV = "DELTA_SANDBOX_REMOTE_BASE_URL"
 TOKEN_FILE_ENV = "DELTA_SANDBOX_REMOTE_TOKEN_FILE"
 
 FORBIDDEN_CAPABILITIES = (
-    "/sandbox/ensure",
     "/sandbox/exec",
-    "sandbox.ensure",
     "sandbox.exec",
 )
 
@@ -131,8 +132,57 @@ def main() -> int:
             "ATTACHMENT_HOOK_NOT_WIRED"
         )
 
+    if "_ensure_remote_sandbox" in register_source:
+        raise AssertionError(
+            "ensure helper must not be wired by register"
+        )
+
+    hook_node = None
+
+    for node in tree.body:
+        if (
+            isinstance(
+                node,
+                (
+                    ast.FunctionDef,
+                    ast.AsyncFunctionDef,
+                ),
+            )
+            and node.name
+            == "_on_file_attachment_staged"
+        ):
+            hook_node = node
+            break
+
+    if hook_node is None:
+        return red(
+            "ATTACHMENT_HOOK_FUNCTION_MISSING"
+        )
+
+    hook_source = (
+        ast.get_source_segment(
+            source,
+            hook_node,
+        )
+        or ""
+    )
+
+    if "_ensure_remote_sandbox" in hook_source:
+        raise AssertionError(
+            "attachment hook must not invoke ensure yet"
+        )
+
+    if "ENSURE_ROUTE" in hook_source:
+        raise AssertionError(
+            "attachment hook must not reference ensure route yet"
+        )
+
     print(
-        "STATUS_ONLY_PLUGIN_CONTRACT=GREEN"
+        "STATUS_HOOK_CONTRACT=GREEN"
+    )
+
+    print(
+        "ENSURE_HELPER_DORMANT=GREEN"
     )
 
     return 0

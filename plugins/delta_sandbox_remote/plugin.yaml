@@ -4,3 +4,4 @@ description: "Observe the fixed Delta remote sandbox status from Hermes attachme
 kind: standalone
 provides_hooks:
   - on_file_attachment_staged
+  - on_session_start

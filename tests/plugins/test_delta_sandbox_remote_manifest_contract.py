@@ -4,7 +4,8 @@ No YAML dependency is required for this RED contract.
 
 The manifest must identify a flat bundled standalone plugin whose
 effective Hermes plugin key is `delta_sandbox_remote`, and it must
-declare only the generic attachment lifecycle hook used by this slice.
+declare exactly the generic attachment and session-start lifecycle hooks
+used by the Delta adapter.
 """
 
 from pathlib import Path
@@ -21,7 +22,10 @@ MANIFEST = (
 
 EXPECTED_NAME = "delta_sandbox_remote"
 
-EXPECTED_HOOK = "on_file_attachment_staged"
+EXPECTED_HOOKS = (
+    "on_file_attachment_staged",
+    "on_session_start",
+)
 
 
 def red(reason: str) -> int:
@@ -55,6 +59,7 @@ def main() -> int:
         "kind: standalone",
         "provides_hooks:",
         "  - on_file_attachment_staged",
+        "  - on_session_start",
     )
 
     for required in required_exact:
@@ -131,13 +136,11 @@ def main() -> int:
                 stripped[2:]
             )
 
-    if hook_values != [
-        EXPECTED_HOOK
-    ]:
+    if tuple(hook_values) != EXPECTED_HOOKS:
         raise AssertionError(
             "manifest hook declaration must "
             "contain exactly "
-            + EXPECTED_HOOK
+            + repr(EXPECTED_HOOKS)
         )
 
     # Flat plugin path + manifest name means
